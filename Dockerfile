@@ -22,7 +22,11 @@ RUN sed -i 's/#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config && \
     sed -i 's/#*PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config && \
     sed -i 's/#*PermitEmptyPasswords.*/PermitEmptyPasswords no/' /etc/ssh/sshd_config && \
     sed -i 's/#*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config && \
-    sed -i 's/#*KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config
+    sed -i 's/#*KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config && \
+    echo "GatewayPorts yes" >> /etc/ssh/sshd_config && \
+    echo "AllowTcpForwarding yes" >> /etc/ssh/sshd_config && \
+    echo "ClientAliveInterval 30" >> /etc/ssh/sshd_config && \
+    echo "ClientAliveCountMax 99999" >> /etc/ssh/sshd_config
 
 # Expose SSH port
 EXPOSE 22

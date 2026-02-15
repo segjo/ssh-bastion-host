@@ -124,6 +124,7 @@ The SSH daemon is configured with the following security settings:
 - `PubkeyAuthentication yes`
 - `PermitEmptyPasswords no`
 - `ChallengeResponseAuthentication no`
+- `KbdInteractiveAuthentication no`
 
 ## Troubleshooting
 

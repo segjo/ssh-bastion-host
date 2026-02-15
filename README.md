@@ -68,8 +68,6 @@ ssh -p 2222 bastion@localhost
 Create a `docker-compose.yml` file:
 
 ```yaml
-version: '3.8'
-
 services:
   ssh-bastion:
     build: .

@@ -8,7 +8,8 @@ A secure SSH bastion host Docker container with public key authentication only.
 - **No password authentication**: PasswordAuthentication is disabled
 - **No root login**: Root login is completely disabled
 - **Volume-mapped authorized_keys**: Easy management of SSH keys via Docker volumes
-- **Ubuntu 22.04 LTS base**: Reliable and well-supported base image
+- **Ubuntu 24.04 LTS base**: Reliable and well-supported base image
+- **Automated client setup**: Comprehensive `client-setup.sh` script for easy client configuration with key generation, autossh installation, and autostart configuration (systemd, crontab, or manual)
 
 ## Quick Start
 
@@ -364,6 +365,200 @@ Add:
 ```
 
 This checks every 5 minutes if the tunnel is running, and reconnects if it's down.
+
+### Automated Client Setup Script
+
+An automated setup script is provided to simplify client configuration. This script:
+
+- Installs autossh and openssh-client
+- Generates SSH keys automatically
+- Creates a tunnel script
+- Configures autostart (systemd, crontab, or manual)
+- Displays the public key for easy addition to bastion's authorized_keys
+
+#### Usage
+
+```bash
+sudo ./client-setup.sh [OPTIONS]
+```
+
+**Required Parameters:**
+
+- `-H, --host` - Bastion host (IP or hostname)
+- `-R, --reverse-port` - Reverse tunnel port on bastion
+
+**Optional Parameters:**
+
+- `-P, --port` - Bastion SSH port (default: 22)
+- `-u, --bastion-user` - Username on bastion (default: bastion)
+- `-s, --autostart` - Autostart method: `systemd`, `crontab`, or `manual` (default: crontab)
+- `-k, --key-name` - SSH key name (default: autossh_bastion_key)
+- `--ssh-user` - Local service user (default: autossh)
+- `--local-port` - Local port to forward (default: 22)
+- `--root` - Run as root (for root crontab)
+- `-h, --help` - Show help message
+
+#### Examples
+
+**Basic setup with crontab (default):**
+
+```bash
+sudo ./client-setup.sh -H bastion.example.com -P 2222 -R 8080
+```
+
+**Setup with systemd service:**
+
+```bash
+sudo ./client-setup.sh -H 192.168.1.10 -P 22 -R 9090 -s systemd
+```
+
+**Setup as root with custom key name:**
+
+```bash
+sudo ./client-setup.sh -H bastion.local -R 8888 -k my_bastion_key --root
+```
+
+**Forward multiple ports (requires manual tunnel.sh editing):**
+
+```bash
+sudo ./client-setup.sh -H bastion.example.com -R 8080 -s manual
+# Edit /home/autossh/tunnel.sh to add multiple -R flags
+```
+
+#### What the Script Does
+
+1. **Installs Dependencies**
+   - Detects package manager (apt, yum, or brew)
+   - Installs autossh and openssh-client
+
+2. **Creates Service User**
+   - Creates `autossh` user for running the service (unless using --root)
+   - Sets appropriate ownership and permissions
+
+3. **Generates SSH Key**
+   - Creates Ed25519 key pair for autossh
+   - No passphrase (required for unattended operation)
+   - Stores in ~/.ssh/autossh_bastion_key
+
+4. **Creates Tunnel Script**
+   - Generates tunnel.sh with configured parameters
+   - Sets proper execute permissions
+   - Ready to run manually or via autostart
+
+5. **Configures Autostart**
+   - **Crontab**: Runs at boot and checks every 5 minutes
+   - **Systemd**: Creates systemd service with auto-restart
+   - **Manual**: User must run tunnel.sh manually
+
+6. **Displays Public Key**
+   - Shows the generated public key
+   - Instructions for adding to bastion's authorized_keys
+
+#### Output Example
+
+```
+════════════════════════════════════════════════════════════════
+PUBLIC KEY FOR BASTION AUTHORIZED_KEYS
+════════════════════════════════════════════════════════════════
+
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHbK8x... autossh@internal-machine
+
+════════════════════════════════════════════════════════════════
+
+Add this key to the bastion's authorized_keys:
+
+On bastion host:
+  cat ~/.ssh/authorized_keys
+
+Or add it directly if autossh is running:
+  docker exec ssh-bastion bash -c 'echo "ssh-ed25519 AAAAC3Nza..." >> /home/bastion/.ssh/authorized_keys'
+  docker exec ssh-bastion chmod 600 /home/bastion/.ssh/authorized_keys
+```
+
+#### Systemd Service Commands
+
+```bash
+# Check status
+sudo systemctl status autossh-bastion
+
+# View live logs
+sudo journalctl -u autossh-bastion -f
+
+# Stop the service
+sudo systemctl stop autossh-bastion
+
+# Start the service
+sudo systemctl start autossh-bastion
+
+# Restart the service
+sudo systemctl restart autossh-bastion
+```
+
+#### Crontab Setup Details
+
+Two crontab entries are added:
+
+1. **@reboot** - Starts tunnel 10 seconds after boot
+
+   ```cron
+   @reboot sleep 10 && /home/autossh/tunnel.sh
+   ```
+
+2. **Every 5 minutes** - Ensures tunnel stays running
+   ```cron
+   */5 * * * * /home/autossh/tunnel.sh > /tmp/autossh.log 2>&1
+   ```
+
+View configured crontab:
+
+```bash
+sudo crontab -l                    # For root setup
+sudo -u autossh crontab -l         # For autossh user setup
+```
+
+#### Manual Tunnel Testing
+
+```bash
+# Run tunnel script directly
+/home/autossh/tunnel.sh
+
+# Or run autossh manually for debugging
+autossh -M 0 -f -i ~/.ssh/autossh_bastion_key \
+  -R *:8080:localhost:22 bastion@bastion.example.com \
+  -p 22 -N -T -v
+
+# Test connection from bastion after tunnel starts
+ssh -p 8080 user@bastion.example.com
+```
+
+#### Troubleshooting Script Setup
+
+**Script fails to install packages:**
+
+```bash
+# Update package manager and try again
+sudo apt-get update && sudo apt-get upgrade
+sudo ./client-setup.sh ...
+```
+
+**Permission denied on tunnel.sh:**
+
+```bash
+# Fix ownership (if not done automatically)
+sudo chown autossh:autossh /home/autossh/tunnel.sh
+sudo chmod 755 /home/autossh/tunnel.sh
+```
+
+**SSH key not working:**
+
+```bash
+# Verify public key was added to bastion
+docker exec ssh-bastion grep "AAAAC3NzaC1lZDI1NTE5" /home/bastion/.ssh/authorized_keys
+
+# Check key permissions on client
+ls -la ~/.ssh/autossh_bastion_key*
+# Should show: -rw------- for private key, -rw-r--r-- for public
+```
 
 ### Multiple Port Forwards
 

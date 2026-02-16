@@ -221,9 +221,10 @@ exec autossh -M "$MONITORE_PORT" \
     -i "$KEY_PATH" \
     -R "*:$REVERSE_PORT:localhost:$LOCAL_PORT" \
     -p "$TUNNEL_PORT" \
+    -o "UserKnownHostsFile=/dev/null" \
+    -o "StrictHostKeyChecking=no" \
     -o "ServerAliveInterval=30" \
     -o "ServerAliveCountMax=3" \
-    -o "StrictHostKeyChecking=accept-new" \
     -o "ExitOnForwardFailure=yes" \
     "$TUNNEL_ENDPOINT"
 TUNNEL_SCRIPT

@@ -28,9 +28,6 @@ services:
         reservations:
           cpus: '0.2'
           memory: 128M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
 
 networks:
   bastion-network:

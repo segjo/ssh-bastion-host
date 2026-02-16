@@ -4,19 +4,34 @@ services:
     container_name: ssh-bastion-host
     ports:
       - "2222:22"
+      - "8080:8080"
     volumes:
       # Mount your authorized_keys file or directory here
       # IMPORTANT: Set correct permissions on host before mounting:
       #   chmod 700 ./ssh-data && chmod 600 ./ssh-data/authorized_keys
       #   sudo chown -R 1000:1000 ./ssh-data
       - ./ssh-data:/home/bastion/.ssh:ro
+      # Mount /proc to read SSH process information
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    environment:
+      RUST_LOG: info
     restart: unless-stopped
+    networks:
+      - bastion-network
     # Optional: Add resource limits
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: '1.0'
+          memory: 384M
+        reservations:
+          cpus: '0.2'
           memory: 128M
         reservations:
           cpus: '0.1'
-          memory: 64M
+          memory: 128M
+
+networks:
+  bastion-network:
+    driver: bridge

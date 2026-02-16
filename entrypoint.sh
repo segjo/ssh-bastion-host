@@ -16,5 +16,21 @@ fi
 chown -R bastion:bastion /home/bastion/.ssh 2>/dev/null || echo "Note: Could not change ownership of .ssh directory (possibly read-only mount)"
 chmod 700 /home/bastion/.ssh 2>/dev/null || echo "Note: Could not change permissions of .ssh directory (possibly read-only mount)"
 
-# Execute the command passed to the container
-exec "$@"
+# Start the dashboard in the background
+echo "Starting SSH Bastion Dashboard on port 8080..."
+/usr/local/bin/ssh-bastion-dashboard &
+DASHBOARD_PID=$!
+
+# Function to cleanup on exit
+cleanup() {
+    echo "Shutting down..."
+    kill $DASHBOARD_PID 2>/dev/null || true
+    exit 0
+}
+
+# Set up signal handlers
+trap cleanup TERM INT
+
+# Start SSH server in the foreground
+echo "Starting SSH server..."
+exec /usr/sbin/sshd -D -e

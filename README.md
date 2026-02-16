@@ -2,6 +2,8 @@
 
 A secure SSH bastion host Docker container with public key authentication only.
 
+![SSH Bastion Dashboard](./screenshots/dashboard.svg)
+
 ## Features
 
 - **Secure by default**: Only public key authentication is allowed
@@ -10,6 +12,7 @@ A secure SSH bastion host Docker container with public key authentication only.
 - **Volume-mapped authorized_keys**: Easy management of SSH keys via Docker volumes
 - **Ubuntu 24.04 LTS base**: Reliable and well-supported base image
 - **Automated client setup**: Comprehensive `client-setup.sh` script for easy client configuration with key generation, autossh installation, and autostart configuration (systemd, crontab, or manual)
+- **Web Dashboard**: Real-time monitoring dashboard with modern UI for visualizing all active reverse SSH connections, ports, and connection statistics
 
 ## Quick Start
 
@@ -600,6 +603,136 @@ ss -tlnp | grep :8080  # Check if port is listening
 - **Connection refused**: Verify `GatewayPorts yes` is set on bastion (it is by default)
 - **Permission denied**: Check that the autossh user's public key is in `authorized_keys`
 - **Port already in use**: Change the `8080` port to something else or stop conflicting processes
+
+## SSH Bastion Web Dashboard
+
+A real-time web dashboard for monitoring all active reverse SSH connections on the bastion host.
+
+![SSH Bastion Dashboard](./screenshots/dashboard.svg)
+
+### Features
+
+- 🔐 Real-time monitoring of active reverse SSH tunnels
+- 📊 Display connection details: ports, users, hosts
+- 🎨 Modern responsive web UI with dark theme
+- 🔄 Auto-refresh every 5 seconds
+- 📱 Mobile-friendly design
+- 🏥 Health check endpoint
+
+### Accessing the Dashboard
+
+With Docker Compose:
+
+```bash
+docker-compose up -d
+# Dashboard available at http://localhost:8080
+```
+
+### Dashboard Information
+
+The dashboard displays for each active connection:
+
+- **Status**: Connection status (Connected/Disconnected)
+- **PID**: Process ID of the autossh process
+- **User**: System user running the tunnel
+- **Bastion**: Bastion host and port
+- **Reverse Port**: Port on bastion for incoming connections
+- **Local Bind**: Local address and port being forwarded
+- **Command**: Full SSH/autossh command
+
+### Example Dashboard View
+
+```
+🔐 SSH Bastion Dashboard
+Active Connections: 2 | Last Updated: 14:30:45
+
+┌─────────────────────────────────────────────────┐
+│ ✓ Connected                          PID: 12345 │
+│ User: root                                      │
+│ Bastion: bastion.example.com:2222              │
+│ Reverse Port: 8080                             │
+│ Local Bind: localhost:22                       │
+└─────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────┐
+│ ✓ Connected                          PID: 12346 │
+│ User: ubuntu                                    │
+│ Bastion: bastion.example.com:2222              │
+│ Reverse Port: 8081                             │
+│ Local Bind: localhost:443                      │
+└─────────────────────────────────────────────────┘
+```
+
+### API Endpoints
+
+**Get all connections as JSON:**
+
+```bash
+curl http://localhost:8080/api/connections/json
+```
+
+**Response:**
+
+```json
+{
+  "total_connections": 2,
+  "timestamp": "2024-02-16T14:30:45.123Z",
+  "connections": [
+    {
+      "pid": 12345,
+      "user": "root",
+      "remote_bind": "*:8080",
+      "local_bind": "localhost",
+      "remote_port": 8080,
+      "local_port": 22,
+      "bastion_host": "bastion.example.com",
+      "bastion_port": 2222,
+      "command": "autossh -M 0 -R *:8080:localhost:22...",
+      "status": "Connected"
+    }
+  ]
+}
+```
+
+**Health check:**
+
+```bash
+curl http://localhost:8080/api/health
+```
+
+### Building the Dashboard from Source
+
+```bash
+cd web-dashboard
+cargo build --release
+./target/release/ssh-bastion-dashboard
+```
+
+Or with Docker:
+
+```bash
+docker build -f web-dashboard/Dockerfile -t ssh-bastion-dashboard .
+docker run -p 8080:8080 ssh-bastion-dashboard
+```
+
+### Dashboard Customization
+
+Edit `web-dashboard/src/templates/script.js` to change refresh interval:
+
+```javascript
+const CONFIG = {
+  REFRESH_INTERVAL: 5000, // milliseconds
+  API_ENDPOINT: "/api/connections/json",
+};
+```
+
+### Resource Usage
+
+- CPU: ~0.1-0.5 cores
+- Memory: ~64-256 MB
+- Check logs: `docker logs ssh-bastion-dashboard`
+
+For detailed dashboard documentation, see [web-dashboard/README.md](web-dashboard/README.md).
 
 ## Troubleshooting
 

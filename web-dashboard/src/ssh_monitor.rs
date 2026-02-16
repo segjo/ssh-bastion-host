@@ -27,22 +27,72 @@ impl SSHMonitor {
             .unwrap()
             .as_secs();
         
-        // Get all processes
+        // Get all sshd processes
         let output = Command::new("ps")
             .args(&["aux"])
             .output()?;
 
         let ps_output = String::from_utf8_lossy(&output.stdout);
         
-        // Parse for autossh and ssh processes with reverse tunnels
+        // Parse for sshd processes (reverse tunnel connections)
         for line in ps_output.lines() {
-            if let Some(conn) = self.parse_ssh_process(line) {
-                // Found connection
-                self.connections.push(conn);
+            // Look for sshd processes
+            if line.contains("sshd:") && !line.contains("grep") {
+                if let Some(conn) = self.parse_sshd_process(line) {
+                    self.connections.push(conn);
+                }
             }
         }
 
         Ok(())
+    }
+
+    fn parse_sshd_process(&self, line: &str) -> Option<Connection> {
+        // Parse sshd processes to detect active SSH connections
+        // Example: "bastion    369  0.4  0.0  14688  6548 ?        S    11:45   0:00  \_ sshd: bastion"
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 {
+            return None;
+        }
+
+        // Extract PID and user
+        let pid: u32 = parts.get(1)?.parse().ok()?;
+        let user = parts.get(0)?.to_string();
+
+        // Get client connection info from /proc/[pid]/net/tcp if available
+        let proc_path = format!("/host/proc/{}/net/tcp", pid);
+        if let Ok(tcp_data) = std::fs::read_to_string(&proc_path) {
+            // Parse the TCP connection table
+            for line in tcp_data.lines().skip(1) {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                if fields.len() < 4 {
+                    continue;
+                }
+                
+                // Field 3 is the remote address (peer)
+                if let Some(remote) = fields.get(3) {
+                    let remote_bind = format!("0.0.0.0:22"); // Default SSH port
+                    let status = "Connected".to_string();
+
+                    return Some(Connection {
+                        pid,
+                        user,
+                        remote_bind,
+                        local_bind: "localhost:22".to_string(),
+                        remote_port: 22,
+                        local_port: 22,
+                        bastion_host: "localhost".to_string(),
+                        bastion_port: 22,
+                        command: "sshd: session".to_string(),
+                        uptime: "running".to_string(),
+                        status,
+                    });
+                }
+            }
+        }
+
+        None
     }
 
     fn parse_ssh_process(&self, line: &str) -> Option<Connection> {

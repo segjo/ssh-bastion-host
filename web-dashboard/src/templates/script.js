@@ -1,11 +1,15 @@
 /**
  * SSH Bastion Dashboard - Modern JavaScript
  * Real-time connection monitoring with smooth animations
+ * 
+ * Demo Mode: Add ?demo=1 to URL to load demo-data.json for local testing
+ * Example: http://localhost:3000/?demo=1
  */
 
 const CONFIG = {
     REFRESH_INTERVAL: 5000,
     API_ENDPOINT: '/api/connections/json',
+    DEMO_ENDPOINT: '/web-dashboard/src/templates/demo-data.json',
     ANIMATION_STAGGER: 80
 };
 
@@ -13,12 +17,18 @@ let autoRefreshEnabled = true;
 let refreshInterval = null;
 let previousCount = 0;
 let isLoading = false;
+let demoMode = new URLSearchParams(window.location.search).has('demo');
+let lastConnectionsJSON = null;
 
 // Initialize application
 document.addEventListener('DOMContentLoaded', init);
 
 function init() {
     console.log('%c🔐 SSH Bastion Dashboard', 'color: #22d3ee; font-size: 20px; font-weight: bold;');
+    if (demoMode) {
+        console.log('%c📋 DEMO MODE ENABLED', 'color: #f59e0b; font-weight: bold;');
+        console.log('%cUsing demo-data.json for testing', 'color: #f59e0b;');
+    }
     console.log('%cInitializing...', 'color: #94a3b8;');
     
     setupEventListeners();
@@ -103,7 +113,8 @@ async function loadConnections() {
     isLoading = true;
     
     try {
-        const response = await fetch(CONFIG.API_ENDPOINT);
+        const endpoint = demoMode ? CONFIG.DEMO_ENDPOINT : CONFIG.API_ENDPOINT;
+        const response = await fetch(endpoint);
         
         if (!response.ok) {
             throw new Error(`Server error: ${response.status}`);
@@ -177,6 +188,14 @@ function renderConnections(connections) {
     const container = document.getElementById('connections-container');
     if (!container) return;
     
+    // Check if connections data has changed
+    const connectionsJSON = JSON.stringify(connections);
+    if (lastConnectionsJSON === connectionsJSON) {
+        // No changes, skip re-render to prevent flickering
+        return;
+    }
+    lastConnectionsJSON = connectionsJSON;
+    
     if (!connections || connections.length === 0) {
         container.innerHTML = `
             <div class="no-connections">
@@ -188,7 +207,10 @@ function renderConnections(connections) {
     }
     
     const cards = connections.map((conn, index) => createConnectionCard(conn, index)).join('');
-    container.innerHTML = `<div class="connections-container">${cards}</div>`;
+    container.innerHTML = cards;
+    
+    // Attach copy handlers
+    attachCopyHandlers();
 }
 
 function createConnectionCard(conn, index) {
@@ -207,16 +229,20 @@ function createConnectionCard(conn, index) {
                     <span class="value">${escape(conn.user)}</span>
                 </div>
                 <div class="connection-row">
-                    <span class="label">Bastion Host</span>
-                    <span class="value">${escape(conn.bastion_host)}:${conn.bastion_port}</span>
-                </div>
-                <div class="connection-row">
                     <span class="label">Reverse Port</span>
                     <span class="value highlight">*:${conn.remote_port}</span>
                 </div>
-                <div class="connection-row">
-                    <span class="label">Local Target</span>
-                    <span class="value">${escape(conn.local_bind)}:${conn.local_port}</span>
+                <div class="connection-row command-row">
+                    <div class="command-content">
+                        <span class="label">Connect Command</span>
+                        <span class="value command-text" data-command="${escape(conn.command)}" style="font-size: 0.85rem;">${escape(conn.command)}</span>
+                    </div>
+                    <button class="btn-copy" data-command="${escape(conn.command)}" title="Copy command">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                            <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                        </svg>
+                    </button>
                 </div>
             </div>
         </div>
@@ -233,6 +259,43 @@ function renderError(message) {
             <small>${escape(message)}</small>
         </div>
     `;
+}
+
+function attachCopyHandlers() {
+    const copyButtons = document.querySelectorAll('.btn-copy');
+    copyButtons.forEach(button => {
+        button.addEventListener('click', function(e) {
+            e.preventDefault();
+            const command = this.getAttribute('data-command');
+            copyToClipboard(command, this);
+        });
+    });
+}
+
+function copyToClipboard(text, button) {
+    navigator.clipboard.writeText(text).then(() => {
+        // Visual feedback
+        const originalHTML = button.innerHTML;
+        const originalTitle = button.title;
+        
+        button.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+        `;
+        button.title = 'Copied!';
+        button.classList.add('copied');
+        
+        setTimeout(() => {
+            button.innerHTML = originalHTML;
+            button.title = originalTitle;
+            button.classList.remove('copied');
+        }, 2000);
+        
+        console.log('%c✓ Command copied to clipboard', 'color: #10b981;');
+    }).catch(err => {
+        console.error('%c✗ Failed to copy', 'color: #ef4444;', err);
+    });
 }
 
 function startAutoRefresh() {

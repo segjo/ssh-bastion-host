@@ -1,0 +1,45 @@
+{
+  "total_connections": 3,
+  "timestamp": 1708104000,
+  "connections": [
+    {
+      "pid": 9071,
+      "user": "bastion",
+      "remote_bind": "*:8951",
+      "local_bind": "localhost:22",
+      "remote_port": 8951,
+      "local_port": 22,
+      "bastion_host": "nas.example.com",
+      "bastion_port": 22,
+      "command": "ssh -p 8951 root@192.168.1.12",
+      "uptime": "running",
+      "status": "Connected"
+    },
+    {
+      "pid": 9083,
+      "user": "deploy",
+      "remote_bind": "*:2222",
+      "local_bind": "localhost:22",
+      "remote_port": 2222,
+      "local_port": 22,
+      "bastion_host": "prod-server.internal",
+      "bastion_port": 22,
+      "command": "ssh -p 2222 root@prod-server.internal",
+      "uptime": "running",
+      "status": "Connected"
+    },
+    {
+      "pid": 9095,
+      "user": "dev",
+      "remote_bind": "*:3333",
+      "local_bind": "localhost:22",
+      "remote_port": 3333,
+      "local_port": 22,
+      "bastion_host": "dev-vm.local",
+      "bastion_port": 22,
+      "command": "ssh -p 3333 root@dev-vm.local",
+      "uptime": "running",
+      "status": "Connected"
+    }
+  ]
+}

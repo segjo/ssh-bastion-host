@@ -355,8 +355,9 @@ body::after {
 /* =========== CONNECTIONS GRID =========== */
 .connections-container {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(550px, 1fr));
   gap: 24px;
+  transition: opacity 0.2s ease;
 }
 
 .connection-card {
@@ -371,6 +372,7 @@ body::after {
   animation: cardEntrance 0.5s ease-out forwards;
   opacity: 0;
   transform: translateY(20px);
+  max-width: 1600px;
 }
 
 @keyframes cardEntrance {
@@ -515,6 +517,77 @@ body::after {
   text-shadow: 0 0 20px var(--accent-glow);
 }
 
+/* Command Row with Copy Button */
+.command-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 12px !important;
+  min-height: 60px;
+}
+
+.command-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.command-content .label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+.command-content .value {
+  word-break: break-all;
+  white-space: normal;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.btn-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.btn-copy:hover {
+  border-color: var(--border-accent);
+  background: rgba(6, 182, 212, 0.1);
+  color: var(--accent-secondary);
+  transform: scale(1.05);
+}
+
+.btn-copy:active {
+  transform: scale(0.95);
+}
+
+.btn-copy.copied {
+  border-color: var(--success);
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success);
+}
+
+.btn-copy svg {
+  display: block;
+  stroke: currentColor;
+}
+
 /* =========== EMPTY STATE =========== */
 .no-connections {
   grid-column: 1 / -1;
@@ -594,94 +667,6 @@ body::after {
 
 .footer p {
   font-weight: 500;
-}
-
-/* =========== RESPONSIVE =========== */
-@media (max-width: 1024px) {
-  .container {
-    padding: 24px;
-  }
-
-  .connections-container {
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  }
-}
-
-@media (max-width: 768px) {
-  .container {
-    padding: 16px;
-  }
-
-  .header {
-    padding: 32px 24px;
-  }
-
-  .header-content h1 {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-  }
-
-  .header-content h1 .logo {
-    width: 48px;
-    height: 48px;
-  }
-
-  .header-info {
-    grid-template-columns: 1fr;
-  }
-
-  .connections-container {
-    grid-template-columns: 1fr;
-  }
-
-  .controls {
-    flex-direction: column;
-  }
-
-  .btn {
-    width: 100%;
-  }
-
-  .auto-refresh-toggle {
-    width: 100%;
-    justify-content: space-between;
-    margin-left: 0;
-  }
-
-  .connection-row {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
-  }
-
-  .connection-row .value {
-    text-align: left;
-  }
-}
-
-@media (max-width: 480px) {
-  .header {
-    padding: 24px 20px;
-  }
-
-  .info-item {
-    padding: 16px;
-  }
-
-  .info-item .value {
-    font-size: 1.5rem;
-  }
-
-  .connection-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-  }
-
-  .pid {
-    align-self: flex-end;
-  }
 }
 
 /* Accessibility */

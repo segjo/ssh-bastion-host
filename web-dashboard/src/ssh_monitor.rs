@@ -3,6 +3,7 @@ use regex::Regex;
 use crate::models::Connection;
 use anyhow::Result;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
 
 pub struct SSHMonitor {
     connections: Vec<Connection>,
@@ -27,6 +28,9 @@ impl SSHMonitor {
             .unwrap()
             .as_secs();
         
+        // Get listening ports per PID from ss command
+        let listening_ports = self.get_sshd_listening_ports();
+        
         // Get all sshd processes
         let output = Command::new("ps")
             .args(&["aux"])
@@ -36,9 +40,9 @@ impl SSHMonitor {
         
         // Parse for sshd processes (reverse tunnel connections)
         for line in ps_output.lines() {
-            // Look for sshd processes
-            if line.contains("sshd:") && !line.contains("grep") {
-                if let Some(conn) = self.parse_sshd_process(line) {
+            // Look for sshd processes, skip [priv] privilege separation processes
+            if line.contains("sshd:") && !line.contains("grep") && !line.contains("[priv]") {
+                if let Some(conn) = self.parse_sshd_process(line, &listening_ports) {
                     self.connections.push(conn);
                 }
             }
@@ -47,7 +51,55 @@ impl SSHMonitor {
         Ok(())
     }
 
-    fn parse_sshd_process(&self, line: &str) -> Option<Connection> {
+    /// Get listening ports associated with sshd processes
+    /// Returns a HashMap mapping session name to listening port
+    fn get_sshd_listening_ports(&self) -> HashMap<u32, u16> {
+        let mut port_map: HashMap<u32, u16> = HashMap::new();
+        
+        // Use ss to get listening sockets
+        if let Ok(output) = Command::new("ss")
+            .args(&["-tlnp"])
+            .output()
+        {
+            let ss_output = String::from_utf8_lossy(&output.stdout);
+            let pid_regex = Regex::new(r"pid=(\d+)").ok();
+            let port_regex = Regex::new(r"\*:(\d+)|\[::\]:(\d+)|0\.0\.0\.0:(\d+)").ok();
+            
+            for line in ss_output.lines() {
+                if !line.contains("sshd") {
+                    continue;
+                }
+                
+                // Extract port
+                let port: Option<u16> = port_regex.as_ref().and_then(|re| {
+                    re.captures(line).and_then(|caps| {
+                        caps.get(1).or(caps.get(2)).or(caps.get(3))
+                            .and_then(|m| m.as_str().parse().ok())
+                    })
+                });
+                
+                // Skip standard SSH port (22) as that's the listener
+                if port == Some(22) {
+                    continue;
+                }
+                
+                // Extract PID
+                let pid: Option<u32> = pid_regex.as_ref().and_then(|re| {
+                    re.captures(line).and_then(|caps| {
+                        caps.get(1).and_then(|m| m.as_str().parse().ok())
+                    })
+                });
+                
+                if let (Some(p), Some(port)) = (pid, port) {
+                    port_map.insert(p, port);
+                }
+            }
+        }
+        
+        port_map
+    }
+
+    fn parse_sshd_process(&self, line: &str, listening_ports: &HashMap<u32, u16>) -> Option<Connection> {
         // Parse sshd processes to detect active SSH connections
         // Example: "bastion    369  0.4  0.0  14688  6548 ?        S    11:45   0:00  \_ sshd: bastion"
 
@@ -69,51 +121,35 @@ impl SSHMonitor {
         if let Some(sshd_pos) = line.find("sshd:") {
             let sshd_rest = &line[sshd_pos + 5..].trim();
             
-            // Extract the session info (e.g., "bastion" or "bastion [priv]")
+            // Extract the session info (e.g., "bastion" or "bastion@pts/1")
             let session_info = sshd_rest.split_whitespace().next().unwrap_or("unknown");
+            
+            // Skip pts sessions (interactive shells, not tunnels)
+            if session_info.contains("@pts") || session_info.contains("@notty") {
+                return None;
+            }
 
-            let remote_bind = format!("0.0.0.0:22");
+            // Find the reverse port from listening sockets
+            let remote_port = listening_ports.get(&pid).copied().unwrap_or(0);
+            
+            // Skip if no reverse port is found (not a tunnel)
+            if remote_port == 0 {
+                return None;
+            }
+            
+            let remote_bind = format!("*:{}", remote_port);
             let status = "Connected".to_string();
-
-            // Try to get additional TCP connection info from /proc/[pid]/net/tcp
-            let proc_path = format!("/proc/{}/net/tcp", pid);
-            let (local_bind, remote_port, local_port, bastion_host, bastion_port) = 
-                if let Ok(tcp_data) = std::fs::read_to_string(&proc_path) {
-                    // Parse the TCP connection table to find established connections
-                    let mut found = false;
-                    for tcp_line in tcp_data.lines().skip(1) {
-                        let fields: Vec<&str> = tcp_line.split_whitespace().collect();
-                        if fields.len() < 4 {
-                            continue;
-                        }
-                        
-                        // Look for established connections (state 01)
-                        if let Some(state_field) = fields.get(3) {
-                            if *state_field == "01" {
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                    if found {
-                        ("0.0.0.0:22".to_string(), 22u16, 22u16, "localhost".to_string(), 22u16)
-                    } else {
-                        ("0.0.0.0:22".to_string(), 22u16, 22u16, session_info.to_string(), 22u16)
-                    }
-                } else {
-                    ("0.0.0.0:22".to_string(), 22u16, 22u16, session_info.to_string(), 22u16)
-                };
 
             return Some(Connection {
                 pid,
                 user,
                 remote_bind,
-                local_bind,
+                local_bind: "localhost:22".to_string(),
                 remote_port,
-                local_port,
-                bastion_host,
-                bastion_port,
-                command: format!("sshd: {}", session_info),
+                local_port: 22,
+                bastion_host: session_info.to_string(),
+                bastion_port: 22,
+                command: format!("ssh -p {} root@<bastion-ip>", remote_port),
                 uptime: "running".to_string(),
                 status,
             });

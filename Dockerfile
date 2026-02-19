@@ -24,7 +24,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install OpenSSH server, procps, and runtime dependencies
 RUN apt-get update && \
-    apt-get install -y openssh-server procps ca-certificates && \
+    apt-get install -y openssh-server procps ca-certificates iproute2 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     # Create necessary directories

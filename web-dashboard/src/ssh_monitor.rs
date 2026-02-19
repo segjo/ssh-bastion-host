@@ -27,141 +27,244 @@ impl SSHMonitor {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
-        // Get listening ports per PID from ss command
-        let (listening_ports, all_reverse_ports) = self.get_sshd_listening_ports();
-        
-        // Get all sshd processes
+
+        // --- Step 1: find sshd listening ports (reverse tunnels) and their owning PIDs ---
+        // port_by_pid: pid -> reverse-tunnel port (from ss -tlnpH)
+        // pid_by_port: port -> pid  (inverse, useful for fallback)
+        // all_reverse_ports: ports without matching PID info (ss ran without root)
+        let (port_by_pid, pid_by_port, all_reverse_ports) = self.get_sshd_listening_ports();
+
+        // --- Step 2: find client source IPs from established SSH connections ---
+        // Maps sshd pid -> client_ip:port string
+        let client_ips = self.get_client_ips();
+
+        // --- Step 3: collect candidate sshd tunnel sessions from ps aux ---
         let output = Command::new("ps")
             .args(&["aux"])
             .output()?;
-
         let ps_output = String::from_utf8_lossy(&output.stdout);
-        
-        // Parse for sshd processes (reverse tunnel connections)
-        // Skip [priv] privilege separation processes
+
+        // Tunnel sessions: sshd processes that are NOT:
+        //   [priv] privilege-separation processes
+        //   [listener] main sshd daemon
+        //   @pts / @notty  interactive shell sessions
         let mut sessions: Vec<(u32, String, String)> = Vec::new();
         for line in ps_output.lines() {
-            if line.contains("sshd:") && !line.contains("grep") && !line.contains("[priv]") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    if let Ok(pid) = parts[1].parse::<u32>() {
-                        let user = parts[0].to_string();
-                        if let Some(sshd_pos) = line.find("sshd:") {
-                            let sshd_rest = &line[sshd_pos + 5..].trim();
-                            let session_info = sshd_rest.split_whitespace().next().unwrap_or("unknown").to_string();
-                            
-                            // Skip pts/notty sessions (interactive shells)
-                            if !session_info.contains("@pts") && !session_info.contains("@notty") && !line.contains("[listener]") {
-                                sessions.push((pid, user, session_info));
-                            }
-                        }
+            if !line.contains("sshd:") || line.contains("grep") || line.contains("[priv]") || line.contains("[listener]") {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            if let Ok(pid) = parts[1].parse::<u32>() {
+                let user = parts[0].to_string();
+                if let Some(sshd_pos) = line.find("sshd:") {
+                    let sshd_rest = line[sshd_pos + 5..].trim();
+                    let session_info = sshd_rest.split_whitespace().next().unwrap_or("unknown").to_string();
+                    if !session_info.contains("@pts") && !session_info.contains("@notty") {
+                        sessions.push((pid, user, session_info));
                     }
                 }
             }
         }
-        
-        // Match sessions with ports
-        // First, try exact PID match
-        let mut used_ports: Vec<u16> = Vec::new();
+
+        // --- Step 4: match sessions to ports ---
+        //
+        // Primary path  : pid found in port_by_pid  → exact match, most reliable
+        // Secondary path: pid found in pid_by_port   → port already known, reverse lookup
+        // Tertiary path : no PID info from ss (no root) → use unmatched ports list
+        //                 Order of all_reverse_ports matches order of sessions heuristically
+        //                 (both sorted by port / pid ascending), so alignment is reasonable.
+        let mut used_ports: std::collections::HashSet<u16> = std::collections::HashSet::new();
+
+        // Primary: exact pid → port
         for (pid, user, session_info) in &sessions {
-            if let Some(&port) = listening_ports.get(pid) {
-                self.connections.push(Connection {
-                    pid: *pid,
-                    user: user.clone(),
-                    remote_bind: format!("*:{}", port),
-                    local_bind: "localhost:22".to_string(),
-                    remote_port: port,
-                    local_port: 22,
-                    bastion_host: session_info.clone(),
-                    bastion_port: 22,
-                    command: format!("ssh -p {} root@<bastion-ip>", port),
-                    uptime: "running".to_string(),
-                    status: "Connected".to_string(),
-                });
-                used_ports.push(port);
+            if let Some(&port) = port_by_pid.get(pid) {
+                let client_ip = client_ips.get(pid).cloned().unwrap_or_default();
+                self.push_connection(*pid, user, session_info, &client_ip, port);
+                used_ports.insert(port);
             }
         }
-        
-        // If we have sessions without matched ports, and available ports, assign them
-        let unmatched_sessions: Vec<_> = sessions.iter()
-            .filter(|(pid, _, _)| !listening_ports.contains_key(pid))
-            .collect();
-        
-        let available_ports: Vec<_> = all_reverse_ports.iter()
-            .filter(|p| !used_ports.contains(p))
-            .collect();
-        
-        for (i, (pid, user, session_info)) in unmatched_sessions.iter().enumerate() {
-            if let Some(&&port) = available_ports.get(i) {
-                self.connections.push(Connection {
-                    pid: *pid,
-                    user: user.clone(),
-                    remote_bind: format!("*:{}", port),
-                    local_bind: "localhost:22".to_string(),
-                    remote_port: port,
-                    local_port: 22,
-                    bastion_host: session_info.clone(),
-                    bastion_port: 22,
-                    command: format!("ssh -p {} root@<bastion-ip>", port),
-                    uptime: "running".to_string(),
-                    status: "Connected".to_string(),
-                });
+
+        // Tertiary: ss ran without root → no PID info; align by position
+        if port_by_pid.is_empty() && pid_by_port.is_empty() {
+            let unmatched: Vec<_> = sessions.iter()
+                .filter(|(pid, _, _)| !self.connections.iter().any(|c| c.pid == *pid))
+                .collect();
+            let avail_ports: Vec<_> = all_reverse_ports.iter()
+                .filter(|p| !used_ports.contains(p))
+                .collect();
+            for (i, (pid, user, session_info)) in unmatched.iter().enumerate() {
+                if let Some(&&port) = avail_ports.get(i) {
+                    let client_ip = client_ips.get(pid).cloned().unwrap_or_default();
+                    self.push_connection(*pid, user, session_info, &client_ip, port);
+                }
             }
         }
 
         Ok(())
     }
 
-    /// Get listening ports associated with sshd processes
-    /// Returns a HashMap mapping PID to listening port, and a Vec of all reverse tunnel ports
-    fn get_sshd_listening_ports(&self) -> (HashMap<u32, u16>, Vec<u16>) {
-        let mut port_map: HashMap<u32, u16> = HashMap::new();
+    fn push_connection(&mut self, pid: u32, user: &str, session_info: &str, client_ip: &str, port: u16) {
+        let bastion_host = if client_ip.is_empty() {
+            session_info.to_string()
+        } else {
+            format!("{} ({})", session_info, client_ip)
+        };
+        self.connections.push(Connection {
+            pid,
+            user: user.to_string(),
+            remote_bind: format!("*:{}", port),
+            local_bind: "localhost:22".to_string(),
+            remote_port: port,
+            local_port: 22,
+            bastion_host,
+            bastion_port: 22,
+            command: format!("ssh -p {} root@<bastion-ip>", port),
+            uptime: "running".to_string(),
+            status: "Connected".to_string(),
+        });
+    }
+
+    /// Parse `ss -tlnpH` to find sshd listening ports for reverse tunnels.
+    ///
+    /// Returns:
+    ///  - `port_by_pid`: pid → port  (populated when ss can show PID info, i.e. running as root)
+    ///  - `pid_by_port`: port → pid  (inverse of above)
+    ///  - `all_reverse_ports`: every sshd port > 1023 found, in ascending order
+    ///    (used as fallback when PID info is unavailable)
+    fn get_sshd_listening_ports(&self) -> (HashMap<u32, u16>, HashMap<u16, u32>, Vec<u16>) {
+        let mut port_by_pid: HashMap<u32, u16> = HashMap::new();
+        let mut pid_by_port: HashMap<u16, u32> = HashMap::new();
         let mut all_ports: Vec<u16> = Vec::new();
-        
-        // Use ss to get listening sockets
-        if let Ok(output) = Command::new("ss")
-            .args(&["-tlnp"])
-            .output()
-        {
-            let ss_output = String::from_utf8_lossy(&output.stdout);
-            
-            for line in ss_output.lines() {
-                if !line.contains("sshd") {
-                    continue;
-                }
-                
-                // Extract port from Local Address:Port format
-                if let Some(port_str) = line.split_whitespace().nth(3) {
-                    if let Some(port_part) = port_str.split(':').last() {
-                        if let Ok(port) = port_part.parse::<u16>() {
-                            // Skip standard SSH port (22) as that's the listener
-                            if port == 22 {
-                                continue;
-                            }
-                            
-                            // Extract all PIDs from the process info (there may be multiple)
-                            if let Some(process_info) = line.split("users:").nth(1) {
-                                let pid_regex = Regex::new(r"pid=(\d+)").ok();
-                                if let Some(regex) = pid_regex {
-                                    for cap in regex.captures_iter(process_info) {
-                                        if let Some(pid_str) = cap.get(1) {
-                                            if let Ok(pid) = pid_str.as_str().parse::<u32>() {
-                                                port_map.insert(pid, port);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            all_ports.push(port);
-                        }
+
+        // -H: no header  -t: TCP  -l: listening  -n: numeric  -p: show process
+        // Typical line (as root):
+        //   LISTEN 0 128 0.0.0.0:8951 0.0.0.0:* users:(("sshd",pid=1234,fd=9))
+        // Without root process info is omitted:
+        //   LISTEN 0 128 0.0.0.0:8951 0.0.0.0:*
+        let Ok(output) = Command::new("ss").args(&["-tlnpH"]).output() else {
+            return (port_by_pid, pid_by_port, all_ports);
+        };
+
+        let ss_output = String::from_utf8_lossy(&output.stdout);
+
+        // Extract port from various local-address formats:
+        //   0.0.0.0:8951   [::]:8951   *:8951
+        // We use a regex that anchors to the peer-address column to avoid false matches.
+        let line_re = match Regex::new(
+            r"(?:0\.0\.0\.0|\*|\[::\]):(\d{2,5})\s+(?:0\.0\.0\.0|\*|\[::\]):\*"
+        ) {
+            Ok(r) => r,
+            Err(_) => return (port_by_pid, pid_by_port, all_ports),
+        };
+        let pid_re = match Regex::new(r#""sshd",pid=(\d+)"#) {
+            Ok(r) => r,
+            Err(_) => return (port_by_pid, pid_by_port, all_ports),
+        };
+
+        for line in ss_output.lines() {
+            // Only care about lines that are sshd-owned OR have a port in the tunnel range.
+            // When running without root, "sshd" won't appear in the line — we rely on the
+            // port-range heuristic (>1023, not 22) after checking it's a LISTEN socket.
+            let has_sshd = line.contains("sshd");
+            let is_listen = line.trim_start().starts_with("LISTEN");
+            if !is_listen {
+                continue;
+            }
+
+            let caps = match line_re.captures(line) {
+                Some(c) => c,
+                None => continue,
+            };
+            let port: u16 = match caps.get(1).and_then(|m| m.as_str().parse().ok()) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            // Skip the standard SSH listener port and low ports that are not tunnels
+            if port <= 1023 || port == 22 {
+                continue;
+            }
+
+            // When process info is present, only accept sshd-owned ports.
+            // When process info is absent (no root), accept all high-ports on LISTEN.
+            if line.contains("users:(") && !has_sshd {
+                continue;
+            }
+
+            all_ports.push(port);
+
+            // Extract PIDs from  users:(("sshd",pid=1234,fd=9),...)
+            for pid_cap in pid_re.captures_iter(line) {
+                if let Some(pid_str) = pid_cap.get(1) {
+                    if let Ok(pid) = pid_str.as_str().parse::<u32>() {
+                        port_by_pid.insert(pid, port);
+                        pid_by_port.entry(port).or_insert(pid);
                     }
                 }
             }
         }
-        
-        (port_map, all_ports)
+
+        all_ports.sort_unstable();
+        (port_by_pid, pid_by_port, all_ports)
+    }
+
+    /// Parse `ss -tnpH state established` to find the source IP of each connected client.
+    ///
+    /// Returns a map of sshd pid → "client_ip:port" string.
+    /// This works because each established TCP connection handled by sshd on SSH port
+    /// shows the remote (client) address.
+    fn get_client_ips(&self) -> HashMap<u32, String> {
+        let mut map: HashMap<u32, String> = HashMap::new();
+
+        let Ok(output) = Command::new("ss")
+            .args(&["-tnpH", "state", "established"])
+            .output()
+        else {
+            return map;
+        };
+
+        let ss_output = String::from_utf8_lossy(&output.stdout);
+
+        // Line format:
+        //   ESTAB 0 0 <local_ip>:<local_port> <peer_ip>:<peer_port> users:(("sshd",pid=1234,fd=4))
+        // or without "ESTAB" prefix depending on ss version:
+        //   0 0 <local>:<port> <peer>:<port> users:(...)
+        let pid_re = match Regex::new(r#""sshd",pid=(\d+)"#) {
+            Ok(r) => r,
+            Err(_) => return map,
+        };
+        // Capture peer address (4th or 5th whitespace token that looks like ip:port)
+        // Peer address is the 2nd address column.
+        let addr_re = match Regex::new(
+            r"\d+\s+\d+\s+\S+:\d+\s+(\S+:\d+)\s+users:"
+        ) {
+            Ok(r) => r,
+            Err(_) => return map,
+        };
+
+        for line in ss_output.lines() {
+            if !line.contains("sshd") {
+                continue;
+            }
+            let peer_addr = addr_re
+                .captures(line)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+
+            for pid_cap in pid_re.captures_iter(line) {
+                if let Some(pid_str) = pid_cap.get(1) {
+                    if let Ok(pid) = pid_str.as_str().parse::<u32>() {
+                        map.entry(pid).or_insert_with(|| peer_addr.clone());
+                    }
+                }
+            }
+        }
+
+        map
     }
 
     #[allow(dead_code)]

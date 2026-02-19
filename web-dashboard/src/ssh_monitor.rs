@@ -71,23 +71,29 @@ impl SSHMonitor {
 
         // --- Step 4: match sessions to ports ---
         //
-        // Primary path  : pid found in port_by_pid  → exact match, most reliable
-        // Secondary path: pid found in pid_by_port   → port already known, reverse lookup
-        // Tertiary path : no PID info from ss (no root) → use unmatched ports list
-        //                 Order of all_reverse_ports matches order of sessions heuristically
-        //                 (both sorted by port / pid ascending), so alignment is reasonable.
+        // Sessions are sorted highest PID first so that when multiple sshd processes
+        // share the same port (stale old session + new reconnection), the newest
+        // session wins deduplication below.
+        sessions.sort_by(|a, b| b.0.cmp(&a.0)); // descending PID
+
+        // Primary path  : pid found in port_by_pid  → exact match (requires root)
+        // Tertiary path : no PID info from ss (no root) → positional alignment
         let mut used_ports: std::collections::HashSet<u16> = std::collections::HashSet::new();
 
-        // Primary: exact pid → port
+        // Primary: exact pid → port (running as root)
         for (pid, user, session_info) in &sessions {
             if let Some(&port) = port_by_pid.get(pid) {
-                let client_ip = client_ips.get(pid).cloned().unwrap_or_default();
-                self.push_connection(*pid, user, session_info, &client_ip, port);
-                used_ports.insert(port);
+                // Deduplication: skip if a newer session already claimed this port
+                if !used_ports.contains(&port) {
+                    let client_ip = client_ips.get(pid).cloned().unwrap_or_default();
+                    self.push_connection(*pid, user, session_info, &client_ip, port);
+                    used_ports.insert(port);
+                }
             }
         }
 
         // Tertiary: ss ran without root → no PID info; align by position
+        // sessions is already sorted descending PID, so first match per port = newest session.
         if port_by_pid.is_empty() && pid_by_port.is_empty() {
             let unmatched: Vec<_> = sessions.iter()
                 .filter(|(pid, _, _)| !self.connections.iter().any(|c| c.pid == *pid))

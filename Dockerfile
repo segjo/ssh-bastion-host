@@ -49,7 +49,8 @@ RUN sed -i 's/#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config && \
     echo "GatewayPorts yes" >> /etc/ssh/sshd_config && \
     echo "AllowTcpForwarding yes" >> /etc/ssh/sshd_config && \
     echo "ClientAliveInterval 30" >> /etc/ssh/sshd_config && \
-    echo "ClientAliveCountMax 99999" >> /etc/ssh/sshd_config
+    echo "ClientAliveCountMax 3" >> /etc/ssh/sshd_config && \
+    echo "TCPKeepAlive yes" >> /etc/ssh/sshd_config
 
 # Expose SSH port and dashboard port
 EXPOSE 22 8080

@@ -17,7 +17,7 @@ COPY web-dashboard/src ./src
 RUN cargo build --release
 
 # ============= Runtime Stage =============
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 # Set environment to avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
